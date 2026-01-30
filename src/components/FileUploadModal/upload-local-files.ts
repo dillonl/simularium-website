@@ -13,6 +13,40 @@ import {
 import { LocalSimFile } from "../../state/trajectory/types";
 import { ViewerError, ViewerStatus } from "../../state/viewer/types";
 import { clearBrowserUrlParams } from "../../util/userUrlHandling";
+import { loadUsdFile } from "../../util/usd-loader";
+
+const createDummySimulariumFile = (name: string): ISimulariumFile => {
+    return {
+        getTrajectoryFileInfo: () =>
+            ({
+                version: 1,
+                timeStepSize: 1,
+                totalSteps: 1,
+                timeUnits: { magnitude: 1, name: "s" },
+                spatialUnits: { magnitude: 1, name: "m" },
+                trajectoryTitle: name,
+                plotData: [],
+                // Add camera defaults to prevent undefined access errors
+                cameraDefault: {
+                    position: { x: 0, y: 0, z: 150 },
+                    lookAtPosition: { x: 0, y: 0, z: 0 },
+                    upVector: { x: 0, y: 1, z: 0 },
+                    fovDegrees: 75,
+                },
+                // Add a default box size
+                size: { x: 100, y: 100, z: 100 },
+            } as any),
+        getPlotData: () => [],
+        getNumFrames: () => 1,
+        getFrameIndexAtTime: () => 0,
+        getFrame: () =>
+            ({
+                time: 0,
+                data: [],
+            } as any),
+        getAsBlob: () => new Blob([]),
+    };
+};
 
 let numRequests = 0;
 
@@ -64,10 +98,38 @@ export default async (
         const simulariumFileIndex = findIndex(selectedFiles, (file) =>
             file.name.endsWith(".simularium")
         );
-        if (simulariumFileIndex === -1) {
+        const usdFileIndex = findIndex(selectedFiles, (file) =>
+            /\.usd[azc]?$/.test(file.name)
+        );
+
+        if (simulariumFileIndex === -1 && usdFileIndex === -1) {
             throw new Error(
-                "Trajectory file was not found; please make sure it has a .simularium extension."
+                "Trajectory file was not found; please make sure it has a .simularium or .usd/.usda/.usdc/.usdz extension."
             );
+        }
+
+        if (usdFileIndex !== -1) {
+            const file = selectedFiles[usdFileIndex];
+            const { group, instance } = await loadUsdFile(file);
+
+            loadFunction({
+                lastModified: file.lastModified,
+                name: file.name,
+                data: createDummySimulariumFile(file.name),
+                usdData: group,
+                usdInstance: instance,
+            });
+            if (rcRequest?.onSuccess) {
+                rcRequest.onSuccess(
+                    {
+                        name: file.name,
+                        status: "done",
+                        url: "",
+                    },
+                    new XMLHttpRequest()
+                );
+            }
+            return;
         }
         const parsedFiles = await Promise.all<string | ISimulariumFile>(
             selectedFiles.map((element, index) => {

@@ -17,11 +17,12 @@ module.exports = ({ analyze, env, dest = "dist" } = {}) => ({
         host: devServer.host,
         port: devServer.port,
         historyApiFallback: true,
+        headers: {
+            "Cross-Origin-Embedder-Policy": "require-corp",
+            "Cross-Origin-Opener-Policy": "same-origin",
+        },
         client: {
-            overlay: {
-                errors: true,
-                warnings: false,
-            },
+            overlay: false,
         },
     },
     entry: {
@@ -113,7 +114,7 @@ module.exports = ({ analyze, env, dest = "dist" } = {}) => ({
                 test: /\.html$/i,
                 loader: "html-loader",
                 options: {
-                        esModule: false,
+                    esModule: false,
                 },
             },
             {

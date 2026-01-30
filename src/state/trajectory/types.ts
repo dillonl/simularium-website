@@ -99,6 +99,8 @@ export interface LocalSimFile {
     data: ISimulariumFile;
     lastModified: number;
     geoAssets?: { [key: string]: string };
+    usdData?: any; // THREE.Group
+    usdInstance?: any; // USDZInstance from three-usdz-loader
 }
 
 export interface NetworkedSimFile {

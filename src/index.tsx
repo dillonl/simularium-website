@@ -2,6 +2,9 @@ import "core-js/es6/map";
 import "core-js/es6/promise";
 import "core-js/es6/set";
 
+// MUST be imported first to patch Three.js before USD loader loads
+import "./util/patch-threejs-materials";
+
 import React, { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { Provider, useDispatch, batch } from "react-redux";

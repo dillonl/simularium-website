@@ -14,6 +14,7 @@ import {
     SimulariumController,
     loadSimulariumFile,
 } from "@aics/simularium-viewer";
+import * as THREE from "three";
 
 import {
     ENGINE_TO_TEMPLATE_MAP,
@@ -99,6 +100,24 @@ const resetSimulariumFileState = createLogic({
             if (controller) {
                 controller.clearFile();
             }
+            if (controller && controller.visGeometry) {
+                const usdGroup =
+                    controller.visGeometry.scene.getObjectByName(
+                        "UserUploadedUSD"
+                    );
+                if (usdGroup) {
+                    // Clean up lights added to the USD group
+                    const ambientLight =
+                        usdGroup.getObjectByName("USD_AmbientLight");
+                    const directionalLight = usdGroup.getObjectByName(
+                        "USD_DirectionalLight"
+                    );
+                    if (ambientLight) usdGroup.remove(ambientLight);
+                    if (directionalLight) usdGroup.remove(directionalLight);
+
+                    controller.visGeometry.scene.remove(usdGroup);
+                }
+            }
             clearTrajectory = receiveTrajectory({ ...initialState });
             const setViewerStatusAction = setStatus({
                 status: ViewerStatus.Empty,
@@ -111,6 +130,24 @@ const resetSimulariumFileState = createLogic({
             actions.push(setViewerStatusAction);
             // plot data is a separate request, clear it out to avoid
             // wrong plot data sticking around if the request fails
+            if (controller && controller.visGeometry) {
+                const usdGroup =
+                    controller.visGeometry.scene.getObjectByName(
+                        "UserUploadedUSD"
+                    );
+                if (usdGroup) {
+                    // Clean up lights added to the USD group
+                    const ambientLight =
+                        usdGroup.getObjectByName("USD_AmbientLight");
+                    const directionalLight = usdGroup.getObjectByName(
+                        "USD_DirectionalLight"
+                    );
+                    if (ambientLight) usdGroup.remove(ambientLight);
+                    if (directionalLight) usdGroup.remove(directionalLight);
+
+                    controller.visGeometry.scene.remove(usdGroup);
+                }
+            }
             clearTrajectory = receiveTrajectory({
                 plotData: initialState.plotData,
             });
@@ -256,33 +293,182 @@ const loadLocalFile = createLogic({
 
         clearOutFileTrajectoryUrlParam();
         clearSimulariumFile({ newFile: true });
-        simulariumController
-            .changeFile(
-                {
-                    simulariumFile: localSimFile.data,
-                    geoAssets: localSimFile.geoAssets,
-                },
-                localSimFile.name
-            )
-            .then(() => {
-                dispatch(receiveSimulariumFile(localSimFile));
-                return localSimFile.data;
-            })
-            .then((simulariumFile: ISimulariumFile) => {
-                const plots = simulariumFile.getPlotData();
-                if (plots) {
-                    dispatch(
-                        receiveTrajectory({
-                            plotData: plots,
-                        })
-                    );
+
+        // For USD files, we bypass the normal SimulariumController.changeFile
+        // since we're not loading a real trajectory
+        if (localSimFile.usdData) {
+            if (simulariumController.visGeometry) {
+                localSimFile.usdData.name = "UserUploadedUSD";
+
+                // Add default lighting since USD lights aren't supported by three-usdz-loader
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+                ambientLight.name = "USD_AmbientLight";
+                localSimFile.usdData.add(ambientLight);
+
+                const directionalLight = new THREE.DirectionalLight(
+                    0xffffff,
+                    0.8
+                );
+                directionalLight.position.set(5, 10, 7.5);
+                directionalLight.name = "USD_DirectionalLight";
+                localSimFile.usdData.add(directionalLight);
+
+                // Ensure all objects in the USD data are on the correct layer
+                // The Simularium viewer might be filtering by layer
+                localSimFile.usdData.traverse((obj: any) => {
+                    // Enable the object on all layers to ensure it's visible
+                    obj.layers.enableAll();
+                });
+
+                simulariumController.visGeometry.scene.add(
+                    localSimFile.usdData
+                );
+
+                // Also enable all layers on the camera to see everything
+                simulariumController.visGeometry.camera.layers.enableAll();
+
+                // Calculate bounding box and adjust camera
+                const bbox = new THREE.Box3().setFromObject(
+                    localSimFile.usdData
+                );
+                const center = bbox.getCenter(new THREE.Vector3());
+                const size = bbox.getSize(new THREE.Vector3());
+
+                // Get the max dimension to calculate appropriate camera distance
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const fov =
+                    simulariumController.visGeometry.camera.fov *
+                    (Math.PI / 180);
+                let cameraZ = Math.abs(maxDim / Math.tan(fov / 2));
+
+                // Add some padding
+                cameraZ *= 1.5;
+
+                // Set up camera clipping planes if not already set
+                if (!simulariumController.visGeometry.camera.near) {
+                    simulariumController.visGeometry.camera.near = 0.1;
                 }
-            })
-            .then(done)
-            .catch((error: FrontEndError) => {
-                handleFileLoadError(error, dispatch);
-                done();
-            });
+                if (!simulariumController.visGeometry.camera.far) {
+                    simulariumController.visGeometry.camera.far = 10000;
+                }
+
+                // Position camera to look at the model
+                simulariumController.visGeometry.camera.position.set(
+                    center.x + cameraZ,
+                    center.y + cameraZ,
+                    center.z + cameraZ
+                );
+                simulariumController.visGeometry.camera.lookAt(center);
+                simulariumController.visGeometry.camera.updateProjectionMatrix();
+
+                // Update orbit controls target if available
+                if (simulariumController.visGeometry.controls) {
+                    simulariumController.visGeometry.controls.target.copy(
+                        center
+                    );
+                    simulariumController.visGeometry.controls.update();
+                }
+
+                // For USD files, bypass the SimulariumRenderer and render directly
+                // The SimulariumRenderer uses a custom multi-pass pipeline for instanced meshes
+                // which doesn't work with regular Three.js meshes from USD
+
+                // Store USD instance reference for animation updates
+                const usdInstance = localSimFile.usdInstance;
+                let currentTime = 0;
+                let lastFrameTime = 0;
+
+                // Calculate animation parameters from USD metadata
+                let animationDuration = 0;
+                let fps = 30; // default
+                if (usdInstance) {
+                    const instance = usdInstance as any;
+                    if (instance.endTimecode && instance.timeout) {
+                        fps = 1000 / instance.timeout;
+                        animationDuration = instance.endTimecode / fps;
+                    }
+                }
+
+                // Create a custom render loop that directly uses the WebGLRenderer
+                const animate = (timestamp: number) => {
+                    requestAnimationFrame(animate);
+
+                    // Update USD animation if instance exists
+                    if (usdInstance && usdInstance.update) {
+                        // Calculate delta time
+                        const deltaTime = lastFrameTime
+                            ? (timestamp - lastFrameTime) / 1000
+                            : 0;
+                        lastFrameTime = timestamp;
+
+                        // For now, just play the animation on loop
+                        // TODO: Integrate with Simularium time controls
+                        if (animationDuration > 0) {
+                            currentTime += deltaTime;
+                            if (currentTime > animationDuration) {
+                                currentTime = 0; // Loop
+                            }
+                            usdInstance.update(currentTime);
+
+                            // USD may create new materials during animation, so replace them each frame
+                            if ((usdInstance as any).replaceMaterials) {
+                                (usdInstance as any).replaceMaterials();
+                            }
+                        }
+                    }
+
+                    // Update controls
+                    if (simulariumController.visGeometry.controls) {
+                        simulariumController.visGeometry.controls.update();
+                    }
+
+                    // Render directly with WebGLRenderer, bypassing SimulariumRenderer
+                    simulariumController.visGeometry.threejsrenderer.render(
+                        simulariumController.visGeometry.scene,
+                        simulariumController.visGeometry.camera
+                    );
+                };
+
+                // Start the animation loop
+                animate(0);
+
+                // Manually set viewer to success state since we're not using a real trajectory
+                batch(() => {
+                    dispatch(receiveSimulariumFile(localSimFile));
+                    dispatch(setStatus({ status: ViewerStatus.Success }));
+                });
+            }
+            done();
+        } else {
+            // Normal simularium file loading
+            simulariumController
+                .changeFile(
+                    {
+                        simulariumFile: localSimFile.data,
+                        geoAssets: localSimFile.geoAssets,
+                    },
+                    localSimFile.name
+                )
+                .then(() => {
+                    dispatch(receiveSimulariumFile(localSimFile));
+                    return localSimFile.data;
+                })
+                .then((simulariumFile: ISimulariumFile) => {
+                    const plots = simulariumFile.getPlotData();
+                    if (plots) {
+                        dispatch(
+                            receiveTrajectory({
+                                plotData: plots,
+                            })
+                        );
+                    }
+                })
+                .then(done)
+                .catch((error: FrontEndError) => {
+                    handleFileLoadError(error, dispatch);
+                    done();
+                });
+        }
     },
     type: LOAD_LOCAL_FILE_IN_VIEWER,
 });
