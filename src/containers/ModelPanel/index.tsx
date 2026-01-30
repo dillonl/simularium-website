@@ -11,7 +11,10 @@ import {
     requestTrajectory,
     changeToNetworkedFile,
 } from "../../state/trajectory/actions";
-import { getIsNetworkedFile } from "../../state/trajectory/selectors";
+import {
+    getIsNetworkedFile,
+    getIsUsdFile,
+} from "../../state/trajectory/selectors";
 import {
     AgentRenderingCheckboxMap,
     ChangeAgentsRenderingStateAction,
@@ -41,6 +44,7 @@ import CheckBoxTree, { AgentDisplayNode } from "../../components/AgentTree";
 import NoTrajectoriesText from "../../components/NoTrajectoriesText";
 import NetworkFileFailedText from "../../components/NoTrajectoriesText/NetworkFileFailedText";
 import NoTypeMappingText from "../../components/NoTrajectoriesText/NoTypeMappingText";
+import UsdFileText from "../../components/NoTrajectoriesText/UsdFileText";
 import SideBarContents from "../../components/SideBarContents";
 import { CustomButton } from "../../components/CustomButton";
 import { AgentMetadata, ButtonClass } from "../../constants/interfaces";
@@ -65,6 +69,7 @@ interface ModelPanelProps {
     isSharedCheckboxIndeterminate: boolean;
     viewerStatus: ViewerStatus;
     isNetworkedFile: boolean;
+    isUsdFile: boolean;
     changeToNetworkedFile: ActionCreator<RequestNetworkFileAction>;
     recentColors: string[];
     setRecentColors: ActionCreator<SetRecentColorsAction>;
@@ -87,6 +92,7 @@ const ModelPanel: React.FC<ModelPanelProps> = ({
     isSharedCheckboxIndeterminate,
     viewerStatus,
     isNetworkedFile,
+    isUsdFile,
     changeToNetworkedFile: loadNetworkFile,
     recentColors,
     setRecentColors,
@@ -112,8 +118,16 @@ const ModelPanel: React.FC<ModelPanelProps> = ({
             setRecentColors={setRecentColors}
         />
     );
+    // For USD files with Success status but no agent data, show USD-specific message
+    const successContent =
+        isUsdFile && uiDisplayDataTree.length === 0 ? (
+            <UsdFileText />
+        ) : (
+            checkboxTree
+        );
+
     const contentMap = {
-        [ViewerStatus.Success]: checkboxTree,
+        [ViewerStatus.Success]: successContent,
         [ViewerStatus.Empty]: (
             <NoTrajectoriesText selectFile={loadNetworkFile} />
         ),
@@ -171,6 +185,7 @@ function mapStateToProps(state: State) {
         isSharedCheckboxIndeterminate: getIsSharedCheckboxIndeterminate(state),
         viewerStatus: getStatus(state),
         isNetworkedFile: getIsNetworkedFile(state),
+        isUsdFile: getIsUsdFile(state),
         recentColors: getRecentColors(state),
         selectedAgentMetadata: getSelectedAgentMetadata(state),
         defaultUiSettingsApplied: areDefaultUISettingsApplied(state),

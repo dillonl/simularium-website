@@ -375,49 +375,118 @@ const loadLocalFile = createLogic({
 
                 // Store USD instance reference for animation updates
                 const usdInstance = localSimFile.usdInstance;
-                let currentTime = 0;
-                let lastFrameTime = 0;
+                let currentAnimTime = 0; // Time in seconds
+                let lastRenderTime = 0;
 
                 // Calculate animation parameters from USD metadata
                 let animationDuration = 0;
-                let fps = 30; // default
+                let numFrames = 1;
+                let timeStepSize = 1;
+                let fps = 24; // default USD fps
                 if (usdInstance) {
                     const instance = usdInstance as any;
                     if (instance.endTimecode && instance.timeout) {
                         fps = 1000 / instance.timeout;
                         animationDuration = instance.endTimecode / fps;
+                        numFrames = Math.max(
+                            1,
+                            Math.ceil(instance.endTimecode)
+                        );
+                        timeStepSize =
+                            animationDuration / Math.max(1, numFrames - 1);
                     }
                 }
+
+                // Track whether animation is playing (controlled by UI)
+                let isAnimationPlaying = false;
+
+                // Override SimulariumController methods to work with USD animation
+                // This allows the existing UI controls to work
+                const originalPlayFromTime =
+                    simulariumController.playFromTime.bind(
+                        simulariumController
+                    );
+                const originalGotoTime =
+                    simulariumController.gotoTime.bind(simulariumController);
+
+                simulariumController.playFromTime = (time: number) => {
+                    if (localSimFile.usdData) {
+                        currentAnimTime = time;
+                        isAnimationPlaying = true;
+                    } else {
+                        originalPlayFromTime(time);
+                    }
+                };
+
+                simulariumController.gotoTime = (time: number) => {
+                    if (localSimFile.usdData) {
+                        currentAnimTime = Math.max(
+                            0,
+                            Math.min(time, animationDuration)
+                        );
+                        if (usdInstance && usdInstance.update) {
+                            // USD update() expects time in seconds
+                            usdInstance.update(currentAnimTime);
+                        }
+                    } else {
+                        originalGotoTime(time);
+                    }
+                };
+
+                // Add a pause method for USD files that the UI can call
+                (simulariumController as any).pauseUsdAnimation = () => {
+                    isAnimationPlaying = false;
+                };
+
+                // Mark this as a USD file so ViewerPanel can handle buffering correctly
+                (simulariumController as any).isUsdFile = true;
+
+                // Callback for time updates (set by ViewerPanel)
+                let onTimeUpdate: ((time: number) => void) | null = null;
+                let lastTimeUpdate = 0;
+                const TIME_UPDATE_INTERVAL = 100; // Update UI every 100ms
+
+                (simulariumController as any).setUsdTimeCallback = (
+                    callback: (time: number) => void
+                ) => {
+                    onTimeUpdate = callback;
+                };
 
                 // Create a custom render loop that directly uses the WebGLRenderer
                 const animate = (timestamp: number) => {
                     requestAnimationFrame(animate);
 
-                    // Update USD animation if instance exists
-                    if (usdInstance && usdInstance.update) {
-                        // Calculate delta time
-                        const deltaTime = lastFrameTime
-                            ? (timestamp - lastFrameTime) / 1000
-                            : 0;
-                        lastFrameTime = timestamp;
+                    // Calculate delta time
+                    const deltaTime = lastRenderTime
+                        ? (timestamp - lastRenderTime) / 1000
+                        : 0;
+                    lastRenderTime = timestamp;
 
-                        // For now, just play the animation on loop
-                        // TODO: Integrate with Simularium time controls
-                        if (animationDuration > 0) {
-                            currentTime += deltaTime;
-                            if (currentTime > animationDuration) {
-                                currentTime = 0; // Loop
-                            }
-                            usdInstance.update(currentTime);
+                    // Update USD animation if instance exists and playing
+                    if (
+                        usdInstance &&
+                        usdInstance.update &&
+                        isAnimationPlaying &&
+                        animationDuration > 0
+                    ) {
+                        currentAnimTime += deltaTime;
+                        if (currentAnimTime > animationDuration) {
+                            currentAnimTime = 0; // Loop
+                        }
+                        // USD update() expects time in seconds
+                        usdInstance.update(currentAnimTime);
 
-                            // USD may create new materials during animation, so replace them each frame
-                            if ((usdInstance as any).replaceMaterials) {
-                                (usdInstance as any).replaceMaterials();
-                            }
+                        // Throttled time update to UI
+                        if (
+                            onTimeUpdate &&
+                            timestamp - lastTimeUpdate > TIME_UPDATE_INTERVAL
+                        ) {
+                            lastTimeUpdate = timestamp;
+                            onTimeUpdate(currentAnimTime);
                         }
                     }
 
-                    // Update controls
+                    // Update orbit controls
                     if (simulariumController.visGeometry.controls) {
                         simulariumController.visGeometry.controls.update();
                     }
@@ -432,10 +501,33 @@ const loadLocalFile = createLogic({
                 // Start the animation loop
                 animate(0);
 
-                // Manually set viewer to success state since we're not using a real trajectory
+                // Initialize USD to first frame
+                if (usdInstance && usdInstance.update) {
+                    usdInstance.update(0);
+                }
+
+                // Dispatch trajectory metadata so UI controls show properly
+                const trajectoryActions: AnyAction[] = [
+                    receiveSimulariumFile(localSimFile),
+                    setStatus({ status: ViewerStatus.Success }),
+                ];
+
+                // Only add animation timeline data if there's actually animation
+                if (animationDuration > 0 && numFrames > 1) {
+                    trajectoryActions.push(
+                        receiveTrajectory({
+                            numFrames: numFrames,
+                            timeStep: timeStepSize,
+                            firstFrameTime: 0,
+                            lastFrameTime: animationDuration,
+                            timeUnits: { magnitude: 1, name: "s" },
+                            scaleBarLabel: "",
+                        })
+                    );
+                }
+
                 batch(() => {
-                    dispatch(receiveSimulariumFile(localSimFile));
-                    dispatch(setStatus({ status: ViewerStatus.Success }));
+                    trajectoryActions.forEach((action) => dispatch(action));
                 });
             }
             done();

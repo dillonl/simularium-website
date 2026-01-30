@@ -209,7 +209,7 @@ class ViewerPanel extends React.Component<ViewerPanelProps, ViewerPanelState> {
         prevProps: ViewerPanelProps,
         prevState: ViewerPanelState
     ) {
-        const { error } = this.props;
+        const { error, simulariumController, changeTime } = this.props;
         const current = this.centerContent.current;
 
         const isNewError = () => {
@@ -246,6 +246,17 @@ class ViewerPanel extends React.Component<ViewerPanelProps, ViewerPanelState> {
                 document.exitFullscreen();
             }
         }
+
+        // Register time callback for USD files
+        if (
+            (simulariumController as any).setUsdTimeCallback &&
+            !(simulariumController as any).usdTimeCallbackRegistered
+        ) {
+            (simulariumController as any).setUsdTimeCallback((time: number) => {
+                changeTime(time);
+            });
+            (simulariumController as any).usdTimeCallbackRegistered = true;
+        }
     }
 
     public playForwardOne() {
@@ -281,12 +292,19 @@ class ViewerPanel extends React.Component<ViewerPanelProps, ViewerPanelState> {
             newTime = firstFrameTime;
         }
         simulariumController.playFromTime(newTime);
-        setBuffering(true);
+        // Don't set buffering for USD files - they don't use the normal time callback flow
+        if (!(simulariumController as any).isUsdFile) {
+            setBuffering(true);
+        }
         setIsPlaying(true);
     }
 
     public pause() {
-        const { setIsPlaying } = this.props;
+        const { setIsPlaying, simulariumController } = this.props;
+        // For USD files, also pause the custom animation loop
+        if ((simulariumController as any).pauseUsdAnimation) {
+            (simulariumController as any).pauseUsdAnimation();
+        }
         setIsPlaying(false);
     }
 
@@ -387,8 +405,13 @@ class ViewerPanel extends React.Component<ViewerPanelProps, ViewerPanelState> {
             timeStep,
             isBuffering,
             setBuffering,
+            changeTime,
         } = this.props;
-        if (isBuffering) {
+
+        const isUsdFile = (simulariumController as any).isUsdFile;
+
+        // For non-USD files, check buffering state
+        if (isBuffering && !isUsdFile) {
             return;
         }
 
@@ -400,8 +423,14 @@ class ViewerPanel extends React.Component<ViewerPanelProps, ViewerPanelState> {
             return;
         }
 
-        setBuffering(true);
-        simulariumController.gotoTime(time);
+        // For USD files, update time directly without buffering
+        if (isUsdFile) {
+            simulariumController.gotoTime(time);
+            changeTime(time);
+        } else {
+            setBuffering(true);
+            simulariumController.gotoTime(time);
+        }
     }
 
     public handleUiDisplayDataChanged = (uiData: UIDisplayData) => {

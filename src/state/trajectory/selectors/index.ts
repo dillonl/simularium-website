@@ -2,6 +2,7 @@ import { createSelector } from "reselect";
 
 import {
     isNetworkSimFileInterface,
+    isLocalFileInterface,
     LocalSimFile,
     NetworkedSimFile,
 } from "../types";
@@ -14,6 +15,19 @@ export const getIsNetworkedFile = createSelector(
             return false;
         }
         return isNetworkSimFileInterface(simFile);
+    }
+);
+
+export const getIsUsdFile = createSelector(
+    [getSimulariumFile],
+    (simFile: LocalSimFile | NetworkedSimFile): boolean => {
+        if (!simFile.name) {
+            return false;
+        }
+        if (isLocalFileInterface(simFile)) {
+            return !!simFile.usdData;
+        }
+        return false;
     }
 );
 
